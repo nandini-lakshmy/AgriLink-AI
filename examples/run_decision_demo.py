@@ -4,10 +4,11 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from agrilink_ai.decision_engine import explain_selling_decision, rank_selling_options
+from agrilink_ai.decision_engine import explain_selling_decision, rank_selling_options, recommend_selling_decision
 from agrilink_ai.sample_data import (
     sample_farmer_request,
     sample_government_benchmark,
+    sample_intelligence_context,
     sample_selling_options,
 )
 
@@ -17,9 +18,11 @@ def main() -> None:
     benchmark = sample_government_benchmark()
     options = sample_selling_options()
     ranked = rank_selling_options(farmer, options, benchmark)
+    structured = recommend_selling_decision(farmer, options, sample_intelligence_context())
 
     print("AgriLink AI marketplace ranking")
-    print("-------------------------------")
+    print("Maharashtra sample data only; values are not live government prices.")
+    print("---------------------------------------------------------------")
     for index, decision in enumerate(ranked, start=1):
         print(
             f"{index}. {decision.option_name}: "
@@ -30,6 +33,13 @@ def main() -> None:
             f"confidence={decision.confidence}"
         )
 
+    print()
+    print(
+        "Structured recommendation: "
+        f"{structured.recommendation.decision.value}, "
+        f"score={structured.recommendation.decision_score:.2f}/100, "
+        f"estimated_net_profit=INR {structured.recommendation.estimated_net_profit:,.2f}"
+    )
     print()
     print(explain_selling_decision(ranked[0]))
 

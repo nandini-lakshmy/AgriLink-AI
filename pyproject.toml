@@ -7,6 +7,16 @@ name = "agrilink-ai"
 version = "0.1.0"
 description = "Explainable marketplace intelligence prototype for AgriLink AI."
 requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.116,<1",
+    "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.28,<1",
+    "pytest>=8,<9",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
