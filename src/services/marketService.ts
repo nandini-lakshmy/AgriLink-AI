@@ -23,27 +23,32 @@ function parsePrice(value: string | number): number {
   return Number.isFinite(price) ? price : 0;
 }
 
-export async function getMarketPrices(
+async function fetchAgmarknetRecords(
   crop: string,
   state: string,
   district: string,
-): Promise<MarketPrice[]> {
+  limit: number,
+): Promise<AgmarknetRecord[]> {
   const apiKey = process.env.AGMARKNET_API_KEY;
   const baseUrl = process.env.AGMARKNET_BASE_URL;
 
   if (!apiKey) {
-    throw new Error("AGMARKNET_API_KEY is not defined");
+    throw new Error(
+      "AGMARKNET_API_KEY is not defined",
+    );
   }
 
   if (!baseUrl) {
-    throw new Error("AGMARKNET_BASE_URL is not defined");
+    throw new Error(
+      "AGMARKNET_BASE_URL is not defined",
+    );
   }
 
   const url = new URL(baseUrl);
 
   url.searchParams.set("api-key", apiKey);
   url.searchParams.set("format", "json");
-  url.searchParams.set("limit", "10");
+  url.searchParams.set("limit", String(limit));
   url.searchParams.set(
     "filters[State]",
     state,
@@ -61,7 +66,9 @@ export async function getMarketPrices(
     "desc",
   );
 
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(15000),
+  });
 
   if (!response.ok) {
     throw new Error(
@@ -72,11 +79,13 @@ export async function getMarketPrices(
   const data =
     (await response.json()) as AgmarknetResponse;
 
-  if (!data.records) {
-    return [];
-  }
+  return data.records ?? [];
+}
 
-  return data.records.map((record) => ({
+function mapMarketPrice(
+  record: AgmarknetRecord,
+): MarketPrice {
+  return {
     market_name: record.Market,
     district: record.District,
     state: record.State,
@@ -91,5 +100,83 @@ export async function getMarketPrices(
     weather_risk: "unknown",
     volatility_risk: "unknown",
     source: "data.gov.in / AGMARKNET",
-  }));
+  };
+}
+
+export async function getMarketPrices(
+  crop: string,
+  state: string,
+  district: string,
+): Promise<MarketPrice[]> {
+  const records = await fetchAgmarknetRecords(
+    crop,
+    state,
+    district,
+    10,
+  );
+
+  return records.map(mapMarketPrice);
+}
+
+export interface MarketPriceHistoryItem {
+  market_name: string;
+  date: string;
+  min_price_per_quintal: number;
+  max_price_per_quintal: number;
+  modal_price_per_quintal: number;
+  min_price_per_kg: number;
+  max_price_per_kg: number;
+  modal_price_per_kg: number;
+  grade: string;
+  variety: string;
+  source: string;
+}
+
+export async function getMarketPriceHistory(
+  crop: string,
+  state: string,
+  district: string,
+  limit = 100,
+): Promise<MarketPriceHistoryItem[]> {
+  const records =
+    await fetchAgmarknetRecords(
+      crop,
+      state,
+      district,
+      limit,
+    );
+
+  return records.map((record) => {
+    const minPrice = parsePrice(
+      record.Min_Price,
+    );
+
+    const maxPrice = parsePrice(
+      record.Max_Price,
+    );
+
+    const modalPrice = parsePrice(
+      record.Modal_Price,
+    );
+
+    return {
+      market_name: record.Market,
+      date: record.Arrival_Date,
+      min_price_per_quintal: minPrice,
+      max_price_per_quintal: maxPrice,
+      modal_price_per_quintal: modalPrice,
+      min_price_per_kg: Number(
+        (minPrice / 100).toFixed(2),
+      ),
+      max_price_per_kg: Number(
+        (maxPrice / 100).toFixed(2),
+      ),
+      modal_price_per_kg: Number(
+        (modalPrice / 100).toFixed(2),
+      ),
+      grade: record.Grade,
+      variety: record.Variety,
+      source: "data.gov.in / AGMARKNET",
+    };
+  });
 }

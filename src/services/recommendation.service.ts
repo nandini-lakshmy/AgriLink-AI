@@ -3,6 +3,7 @@ import { Listing } from "../models/listing.model";
 import { Farmer } from "../models/farmer.model";
 import { Requirement } from "../models/requirement.model";
 import { getGovernmentBenchmark } from "./priceComparison.service";
+import { getMarketPriceHistory } from "./marketService";
 
 interface Coordinates {
   latitude: number;
@@ -33,6 +34,16 @@ interface GovernmentPrice {
   modal_price_per_kg: number;
   source: string;
   date: string;
+}
+
+interface TransportInfo {
+  cost_per_km_per_kg: number;
+}
+
+interface PriceHistoryInfo {
+  trend: "rising" | "falling" | "stable" | "unknown";
+  average_price_per_kg: number;
+  history_days: number;
 }
 
 function getCoordinates(
@@ -102,6 +113,212 @@ function calculateDistanceKm(
   );
 }
 
+function formatGovernmentDate(
+  value: string,
+): string {
+  const trimmedValue = value.trim();
+
+  if (
+    /^\d{4}-\d{2}-\d{2}$/.test(
+      trimmedValue,
+    )
+  ) {
+    return trimmedValue;
+  }
+
+  const match =
+    trimmedValue.match(
+      /^(\d{2})\/(\d{2})\/(\d{4})$/,
+    );
+
+  if (match) {
+    const [, day, month, year] = match;
+
+    return `${year}-${month}-${day}`;
+  }
+
+  const parsedDate = new Date(
+    trimmedValue,
+  );
+
+  if (!Number.isNaN(parsedDate.getTime())) {
+    const year = parsedDate.getUTCFullYear();
+    const month = String(
+      parsedDate.getUTCMonth() + 1,
+    ).padStart(2, "0");
+    const day = String(
+      parsedDate.getUTCDate(),
+    ).padStart(2, "0");
+
+    return `${year}-${month}-${day}`;
+  }
+
+  throw new Error(
+    `Invalid government price date: ${value}`,
+  );
+}
+
+function parseAgmarknetDate(
+  value: string,
+): number | null {
+  const match = value
+    .trim()
+    .match(
+      /^(\d{2})\/(\d{2})\/(\d{4})$/,
+    );
+
+  if (!match) {
+    return null;
+  }
+
+  const [, day, month, year] = match;
+
+  const timestamp = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+  );
+
+  return Number.isNaN(timestamp)
+    ? null
+    : timestamp;
+}
+
+function calculatePriceHistory(
+  history: Awaited<
+    ReturnType<typeof getMarketPriceHistory>
+  >,
+): PriceHistoryInfo | null {
+  if (history.length === 0) {
+    return null;
+  }
+
+  const validHistory = history.filter(
+    (item) =>
+      Number.isFinite(
+        item.modal_price_per_kg,
+      ) &&
+      item.modal_price_per_kg > 0 &&
+      parseAgmarknetDate(item.date) !== null,
+  );
+
+  if (validHistory.length === 0) {
+    return null;
+  }
+
+  const totalModalPrice =
+    validHistory.reduce(
+      (sum, item) =>
+        sum + item.modal_price_per_kg,
+      0,
+    );
+
+  const averagePricePerKg = Number(
+    (
+      totalModalPrice /
+      validHistory.length
+    ).toFixed(2),
+  );
+
+  const dates = Array.from(
+    new Set(
+      validHistory.map((item) =>
+        item.date.trim(),
+      ),
+    ),
+  )
+    .map((date) => ({
+      date,
+      timestamp:
+        parseAgmarknetDate(date) as number,
+    }))
+    .sort(
+      (first, second) =>
+        second.timestamp -
+        first.timestamp,
+    );
+
+  if (dates.length < 2) {
+    return {
+      trend: "unknown",
+      average_price_per_kg:
+        averagePricePerKg,
+      history_days: dates.length,
+    };
+  }
+
+  const latestDate = dates[0].date;
+  const previousDate = dates[1].date;
+
+  const latestPrices =
+    validHistory.filter(
+      (item) =>
+        item.date.trim() ===
+        latestDate,
+    );
+
+  const previousPrices =
+    validHistory.filter(
+      (item) =>
+        item.date.trim() ===
+        previousDate,
+    );
+
+  const latestAverage =
+    latestPrices.reduce(
+      (sum, item) =>
+        sum + item.modal_price_per_kg,
+      0,
+    ) / latestPrices.length;
+
+  const previousAverage =
+    previousPrices.reduce(
+      (sum, item) =>
+        sum + item.modal_price_per_kg,
+      0,
+    ) / previousPrices.length;
+
+  let trend:
+    | "rising"
+    | "falling"
+    | "stable"
+    | "unknown";
+
+  if (latestAverage > previousAverage) {
+    trend = "rising";
+  } else if (
+    latestAverage < previousAverage
+  ) {
+    trend = "falling";
+  } else {
+    trend = "stable";
+  }
+
+  return {
+    trend,
+    average_price_per_kg:
+      averagePricePerKg,
+    history_days: dates.length,
+  };
+}
+
+function getTransportCostPerKmPerKg(): number {
+  const configuredValue = Number(
+    process.env.TRANSPORT_COST_PER_KM_PER_KG,
+  );
+
+  if (
+    !Number.isFinite(configuredValue) ||
+    configuredValue < 0
+  ) {
+    throw new Error(
+      "TRANSPORT_COST_PER_KM_PER_KG must be a non-negative number",
+    );
+  }
+
+  return configuredValue;
+}
+
 export async function prepareRecommendationData(
   listingId: string,
 ): Promise<{
@@ -117,12 +334,16 @@ export async function prepareRecommendationData(
   };
   candidates: RecommendationCandidate[];
   government_price: GovernmentPrice | null;
+  price_history: PriceHistoryInfo | null;
+  transport: TransportInfo;
 }> {
   if (!mongoose.Types.ObjectId.isValid(listingId)) {
     throw new Error("Invalid listing_id");
   }
 
-  const listing = await Listing.findById(listingId);
+  const listing = await Listing.findById(
+    listingId,
+  );
 
   if (!listing) {
     throw new Error("Listing not found");
@@ -152,17 +373,22 @@ export async function prepareRecommendationData(
     );
   }
 
-  const requirements = await Requirement.find({
-    crop_name: {
-      $regex: `^${listing.crop_name}$`,
-      $options: "i",
-    },
-    quantity_needed: {
-      $lte: listing.quantity,
-    },
-  }).populate("buyer_id", "-password");
+  const requirements =
+    await Requirement.find({
+      crop_name: {
+        $regex: `^${listing.crop_name}$`,
+        $options: "i",
+      },
+      quantity_needed: {
+        $lte: listing.quantity,
+      },
+    }).populate(
+      "buyer_id",
+      "-password",
+    );
 
-  const candidates: RecommendationCandidate[] = [];
+  const candidates: RecommendationCandidate[] =
+    [];
 
   const maximumCandidateDistanceKm = 25;
 
@@ -177,14 +403,16 @@ export async function prepareRecommendationData(
       continue;
     }
 
-    const distance = calculateDistanceKm(
-      farmerCoordinates,
-      buyerCoordinates,
-    );
+    const distance =
+      calculateDistanceKm(
+        farmerCoordinates,
+        buyerCoordinates,
+      );
 
-    // Basic eligibility/geographic filtering.
-    // Python will perform the actual ranking and scoring.
-    if (distance > maximumCandidateDistanceKm) {
+    if (
+      distance >
+      maximumCandidateDistanceKm
+    ) {
       continue;
     }
 
@@ -192,8 +420,10 @@ export async function prepareRecommendationData(
       id: buyer._id.toString(),
       name: buyer.name,
       type: "buyer",
-      latitude: buyerCoordinates.latitude,
-      longitude: buyerCoordinates.longitude,
+      latitude:
+        buyerCoordinates.latitude,
+      longitude:
+        buyerCoordinates.longitude,
       offered_price_per_kg: Number(
         requirement.offered_price,
       ),
@@ -207,8 +437,9 @@ export async function prepareRecommendationData(
     });
   }
 
-  let governmentPrice: GovernmentPrice | null =
-    null;
+  let governmentPrice:
+    | GovernmentPrice
+    | null = null;
 
   try {
     const benchmark =
@@ -218,14 +449,13 @@ export async function prepareRecommendationData(
         farmer.district,
       );
 
-    // Only send data that we have actually verified.
-    // The current benchmark service provides a modal/median
-    // reference price, not genuine AGMARKNET min/max values.
     governmentPrice = {
       modal_price_per_kg:
         benchmark.government_price_per_kg,
       source: "AGMARKNET",
-      date: benchmark.date,
+      date: formatGovernmentDate(
+        benchmark.date,
+      ),
     };
   } catch (error) {
     console.warn(
@@ -233,6 +463,33 @@ export async function prepareRecommendationData(
       error,
     );
   }
+
+  let priceHistory:
+    | PriceHistoryInfo
+    | null = null;
+
+  try {
+    const history =
+      await getMarketPriceHistory(
+        listing.crop_name,
+        farmer.state,
+        farmer.district,
+        100,
+      );
+
+    priceHistory =
+      calculatePriceHistory(history);
+  } catch (error) {
+    console.warn(
+      "Price history unavailable for recommendation:",
+      error,
+    );
+  }
+
+  const transport: TransportInfo = {
+    cost_per_km_per_kg:
+      getTransportCostPerKmPerKg(),
+  };
 
   return {
     farmer: {
@@ -251,6 +508,12 @@ export async function prepareRecommendationData(
 
     candidates,
 
-    government_price: governmentPrice,
+    government_price:
+      governmentPrice,
+
+    price_history:
+      priceHistory,
+
+    transport,
   };
 }

@@ -4,7 +4,23 @@ import { Requirement } from "../models/requirement.model";
 import { Listing } from "../models/listing.model";
 
 const DEFAULT_RADIUS_KM = 25;
-const TRANSPORT_COST_PER_KM = 20;
+
+function getTransportCostPerKmPerKg(): number {
+  const configuredValue = Number(
+    process.env.TRANSPORT_COST_PER_KM_PER_KG,
+  );
+
+  if (
+    !Number.isFinite(configuredValue) ||
+    configuredValue < 0
+  ) {
+    throw new Error(
+      "TRANSPORT_COST_PER_KM_PER_KG must be a non-negative number",
+    );
+  }
+
+  return configuredValue;
+}
 
 function calculateDistance(
   lat1: number,
@@ -26,7 +42,10 @@ function calculateDistance(
       Math.cos(lat2Rad) *
       Math.sin(deltaLon / 2) ** 2;
 
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const c = 2 * Math.atan2(
+    Math.sqrt(a),
+    Math.sqrt(1 - a),
+  );
 
   return earthRadiusKm * c;
 }
@@ -41,7 +60,9 @@ export async function findMatchingBuyers(
     throw new Error("Listing not found");
   }
 
-  const farmer = await Farmer.findById(listing.farmer_id);
+  const farmer = await Farmer.findById(
+    listing.farmer_id,
+  );
 
   if (!farmer) {
     throw new Error("Farmer not found");
@@ -49,7 +70,10 @@ export async function findMatchingBuyers(
 
   const requirements = await Requirement.find({
     crop_name: {
-      $regex: new RegExp(`^${listing.crop_name}$`, "i"),
+      $regex: new RegExp(
+        `^${listing.crop_name}$`,
+        "i",
+      ),
     },
     quantity_needed: {
       $lte: listing.quantity,
@@ -58,8 +82,13 @@ export async function findMatchingBuyers(
 
   const matches = [];
 
+  const transportCostPerKmPerKg =
+    getTransportCostPerKmPerKg();
+
   for (const requirement of requirements) {
-    const buyer = await Buyer.findById(requirement.buyer_id);
+    const buyer = await Buyer.findById(
+      requirement.buyer_id,
+    );
 
     if (!buyer) {
       continue;
@@ -76,13 +105,17 @@ export async function findMatchingBuyers(
       continue;
     }
 
-    const quantityKg = requirement.quantity_needed;
+    const quantityKg =
+      requirement.quantity_needed;
 
     const grossValue =
-      quantityKg * requirement.offered_price;
+      quantityKg *
+      requirement.offered_price;
 
     const transportCost =
-      distance * TRANSPORT_COST_PER_KM;
+      distance *
+      transportCostPerKmPerKg *
+      quantityKg;
 
     const estimatedNetValue =
       grossValue - transportCost;
@@ -93,8 +126,12 @@ export async function findMatchingBuyers(
       crop_name: requirement.crop_name,
       price_per_kg: requirement.offered_price,
       quantity_needed_kg: quantityKg,
-      gross_value: Number(grossValue.toFixed(2)),
-      distance_km: Number(distance.toFixed(2)),
+      gross_value: Number(
+        grossValue.toFixed(2),
+      ),
+      distance_km: Number(
+        distance.toFixed(2),
+      ),
       estimated_transport_cost: Number(
         transportCost.toFixed(2),
       ),
@@ -107,7 +144,8 @@ export async function findMatchingBuyers(
 
   matches.sort(
     (a, b) =>
-      b.estimated_net_value - a.estimated_net_value,
+      b.estimated_net_value -
+      a.estimated_net_value,
   );
 
   return matches;

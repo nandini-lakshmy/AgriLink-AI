@@ -2,6 +2,7 @@ import { Response } from "express";
 import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { prepareRecommendationData } from "../services/recommendation.service";
+import { getAIRecommendation } from "../services/aiRecommendation.service";
 import { Listing } from "../models/listing.model";
 
 export async function getRecommendationData(
@@ -34,7 +35,6 @@ export async function getRecommendationData(
       return;
     }
 
-    // Make sure the authenticated farmer owns this listing.
     if (listing.farmer_id.toString() !== req.user.id) {
       res.status(403).json({
         message: "You are not the owner of this listing",
@@ -42,19 +42,18 @@ export async function getRecommendationData(
       return;
     }
 
-    const data = await prepareRecommendationData(
-      listingId,
-    );
+    const recommendationData =
+      await prepareRecommendationData(listingId);
+
+    const aiRecommendation =
+      await getAIRecommendation(recommendationData);
 
     res.status(200).json({
-      message: "Recommendation data prepared successfully",
-      data,
+      message: "AI recommendation generated successfully",
+      data: aiRecommendation,
     });
   } catch (error) {
-    console.error(
-      "Get recommendation data error:",
-      error,
-    );
+    console.error("Get AI recommendation error:", error);
 
     if (error instanceof Error) {
       if (
@@ -92,6 +91,17 @@ export async function getRecommendationData(
         "Farmer location coordinates are required for recommendation"
       ) {
         res.status(400).json({
+          message: error.message,
+        });
+        return;
+      }
+
+      if (
+        error.message.startsWith(
+          "AI recommendation service failed:",
+        )
+      ) {
+        res.status(502).json({
           message: error.message,
         });
         return;

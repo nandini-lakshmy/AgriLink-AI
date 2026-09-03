@@ -3,10 +3,20 @@ import {
   getGovernmentAlerts,
   getGovernmentStats,
 } from "../controllers/government.controller";
+import { authenticate } from "../middleware/auth.middleware";
 
 const router = Router();
 
-router.get("/alerts", getGovernmentAlerts);
-router.get("/stats", getGovernmentStats);
+router.get(
+  "/alerts",
+  authenticate,
+  getGovernmentAlerts,
+);
+
+router.get(
+  "/stats",
+  authenticate,
+  getGovernmentStats,
+);
 
 export default router;
