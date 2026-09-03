@@ -25,63 +25,40 @@ function parsePrice(value: string | number): number {
   return Number.isFinite(price) ? price : 0;
 }
 
-async function fetchAgmarknetRecords(
-  crop: string,
-  state: string,
-  district: string,
-  limit: number,
-): Promise<AgmarknetRecord[]> {
-  const apiKey = process.env.AGMARKNET_API_KEY;
-  const baseUrl = process.env.AGMARKNET_BASE_URL;
-
-  if (!apiKey) {
-    throw new Error(
-      "AGMARKNET_API_KEY is not defined",
+function parseAgmarknetDate(
+  value: string,
+): number | null {
+  const match = value
+    .trim()
+    .match(
+      /^(\d{2})\/(\d{2})\/(\d{4})$/,
     );
+
+  if (!match) {
+    return null;
   }
 
-  if (!baseUrl) {
-    throw new Error(
-      "AGMARKNET_BASE_URL is not defined",
-    );
-  }
+  const [, day, month, year] = match;
 
-  const url = new URL(baseUrl);
-
-  url.searchParams.set("api-key", apiKey);
-  url.searchParams.set("format", "json");
-  url.searchParams.set("limit", String(limit));
-  url.searchParams.set(
-    "filters[State]",
-    state,
-  );
-  url.searchParams.set(
-    "filters[District]",
-    district,
-  );
-  url.searchParams.set(
-    "filters[Commodity]",
-    crop,
-  );
-  url.searchParams.set(
-    "sort[Arrival_Date]",
-    "desc",
+  const timestamp = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
   );
 
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(15000),
-  });
+  return Number.isNaN(timestamp)
+    ? null
+    : timestamp;
+}
 
-  if (!response.ok) {
-    throw new Error(
-      `AGMARKNET API request failed: ${response.status}`,
-    );
-  }
-
-  const data =
-    (await response.json()) as AgmarknetResponse;
-
-  return data.records ?? [];
+function normalizeMarketName(
+  value: string,
+): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/\s+apmc$/i, "");
 }
 
 function mapMarketPrice(
@@ -105,19 +82,250 @@ function mapMarketPrice(
   };
 }
 
+async function fetchAgmarknetRecords(
+  crop: string,
+  state: string,
+  district: string,
+  limit: number,
+): Promise<AgmarknetRecord[]> {
+  const apiKey = process.env.AGMARKNET_API_KEY;
+  const baseUrl = process.env.AGMARKNET_BASE_URL;
+
+  if (!apiKey) {
+    throw new Error(
+      "AGMARKNET_API_KEY is not defined",
+    );
+  }
+
+  if (!baseUrl) {
+    throw new Error(
+      "AGMARKNET_BASE_URL is not defined",
+    );
+  }
+
+  const url = new URL(baseUrl);
+
+  url.searchParams.set(
+    "api-key",
+    apiKey,
+  );
+
+  url.searchParams.set(
+    "format",
+    "json",
+  );
+
+  url.searchParams.set(
+    "limit",
+    String(limit),
+  );
+
+  url.searchParams.set(
+    "filters[State]",
+    state,
+  );
+
+  url.searchParams.set(
+    "filters[District]",
+    district,
+  );
+
+  url.searchParams.set(
+    "filters[Commodity]",
+    crop,
+  );
+
+  url.searchParams.set(
+    "sort[Arrival_Date]",
+    "desc",
+  );
+
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `AGMARKNET API request failed: ${response.status}`,
+    );
+  }
+
+  const data =
+    (await response.json()) as AgmarknetResponse;
+
+  return data.records ?? [];
+}
+
 export async function getMarketPrices(
   crop: string,
   state: string,
   district: string,
 ): Promise<MarketPrice[]> {
-  const records = await fetchAgmarknetRecords(
-    crop,
-    state,
-    district,
-    10,
-  );
+  /*
+   * Only markets present in our canonical Market
+   * collection are exposed by this API.
+   *
+   * This prevents unmapped AGMARKNET records from
+   * appearing in the frontend and ensures that every
+   * returned market has validated coordinates available
+   * to the nearby-market service.
+   */
+  const canonicalMarkets = await Market.find({
+    active_status: true,
+    state: {
+      $regex: `^${state.trim()}$`,
+      $options: "i",
+    },
+    district: {
+      $regex: `^${district.trim()}$`,
+      $options: "i",
+    },
+  }).lean();
 
-  return records.map(mapMarketPrice);
+  if (canonicalMarkets.length === 0) {
+    return [];
+  }
+
+  const canonicalMarketMap = new Map<
+    string,
+    {
+      market_name: string;
+      district: string;
+      state: string;
+    }
+  >();
+
+  for (const market of canonicalMarkets) {
+    canonicalMarketMap.set(
+      normalizeMarketName(
+        market.market_name,
+      ),
+      {
+        market_name:
+          market.market_name,
+        district:
+          market.district,
+        state:
+          market.state,
+      },
+    );
+  }
+
+  /*
+   * Request enough records to cover multiple dates
+   * and grade/variety observations for the
+   * canonical markets.
+   */
+  const records =
+    await fetchAgmarknetRecords(
+      crop,
+      state,
+      district,
+      100,
+    );
+
+  /*
+   * Keep only the latest valid observation for each
+   * canonical market.
+   */
+  const latestByMarket = new Map<
+    string,
+    AgmarknetRecord
+  >();
+
+  for (const record of records) {
+    const canonicalName =
+      normalizeMarketName(
+        record.Market,
+      );
+
+    if (
+      !canonicalMarketMap.has(
+        canonicalName,
+      )
+    ) {
+      continue;
+    }
+
+    const recordTimestamp =
+      parseAgmarknetDate(
+        record.Arrival_Date,
+      );
+
+    if (recordTimestamp === null) {
+      continue;
+    }
+
+    const existing =
+      latestByMarket.get(
+        canonicalName,
+      );
+
+    if (!existing) {
+      latestByMarket.set(
+        canonicalName,
+        record,
+      );
+      continue;
+    }
+
+    const existingTimestamp =
+      parseAgmarknetDate(
+        existing.Arrival_Date,
+      );
+
+    if (
+      existingTimestamp === null ||
+      recordTimestamp > existingTimestamp
+    ) {
+      latestByMarket.set(
+        canonicalName,
+        record,
+      );
+    }
+  }
+
+  /*
+   * Return results in the same order as the
+   * canonical market database.
+   */
+  const results: MarketPrice[] = [];
+
+  for (const market of canonicalMarkets) {
+    const canonicalName =
+      normalizeMarketName(
+        market.market_name,
+      );
+
+    const record =
+      latestByMarket.get(
+        canonicalName,
+      );
+
+    if (!record) {
+      continue;
+    }
+
+    const mapped =
+      mapMarketPrice(record);
+
+    /*
+     * Use our canonical market name/location context
+     * rather than blindly trusting the live AGMARKNET
+     * market label.
+     */
+    results.push({
+      ...mapped,
+      market_name:
+        market.market_name,
+      district:
+        market.district,
+      state:
+        market.state,
+    });
+  }
+
+  return results;
 }
 
 export interface MarketPriceHistoryItem {
@@ -140,6 +348,39 @@ export async function getMarketPriceHistory(
   district: string,
   limit = 100,
 ): Promise<MarketPriceHistoryItem[]> {
+  /*
+   * Use the canonical market database to decide which
+   * market identities are valid. Historical observations
+   * remain multiple records per market/date because the
+   * frontend and AI need time-series data.
+   */
+  const canonicalMarkets = await Market.find({
+    active_status: true,
+    state: {
+      $regex: `^${state.trim()}$`,
+      $options: "i",
+    },
+    district: {
+      $regex: `^${district.trim()}$`,
+      $options: "i",
+    },
+  })
+    .lean();
+
+  if (canonicalMarkets.length === 0) {
+    return [];
+  }
+
+  const canonicalMarketNames =
+    new Set(
+      canonicalMarkets.map(
+        (market) =>
+          normalizeMarketName(
+            market.market_name,
+          ),
+      ),
+    );
+
   const records =
     await fetchAgmarknetRecords(
       crop,
@@ -148,43 +389,81 @@ export async function getMarketPriceHistory(
       limit,
     );
 
-  return records.map((record) => {
-    const minPrice = parsePrice(
-      record.Min_Price,
-    );
-
-    const maxPrice = parsePrice(
-      record.Max_Price,
-    );
-
-    const modalPrice = parsePrice(
-      record.Modal_Price,
-    );
-
-    return {
-      market_name: record.Market,
-      date: record.Arrival_Date,
-      min_price_per_quintal: minPrice,
-      max_price_per_quintal: maxPrice,
-      modal_price_per_quintal: modalPrice,
-      min_price_per_kg: Number(
-        (minPrice / 100).toFixed(2),
+  return records
+    .filter((record) =>
+      canonicalMarketNames.has(
+        normalizeMarketName(
+          record.Market,
+        ),
       ),
-      max_price_per_kg: Number(
-        (maxPrice / 100).toFixed(2),
-      ),
-      modal_price_per_kg: Number(
-        (modalPrice / 100).toFixed(2),
-      ),
-      grade: record.Grade,
-      variety: record.Variety,
-      source: "data.gov.in / AGMARKNET",
-    };
-  });
+    )
+    .map((record) => {
+      const minPrice = parsePrice(
+        record.Min_Price,
+      );
+
+      const maxPrice = parsePrice(
+        record.Max_Price,
+      );
+
+      const modalPrice = parsePrice(
+        record.Modal_Price,
+      );
+
+      return {
+        market_name:
+          canonicalMarkets.find(
+            (market) =>
+              normalizeMarketName(
+                market.market_name,
+              ) ===
+              normalizeMarketName(
+                record.Market,
+              ),
+          )?.market_name ??
+          record.Market,
+
+        date: record.Arrival_Date,
+
+        min_price_per_quintal:
+          minPrice,
+
+        max_price_per_quintal:
+          maxPrice,
+
+        modal_price_per_quintal:
+          modalPrice,
+
+        min_price_per_kg:
+          Number(
+            (minPrice / 100).toFixed(2),
+          ),
+
+        max_price_per_kg:
+          Number(
+            (maxPrice / 100).toFixed(2),
+          ),
+
+        modal_price_per_kg:
+          Number(
+            (modalPrice / 100).toFixed(2),
+          ),
+
+        grade: record.Grade,
+        variety: record.Variety,
+
+        source:
+          "data.gov.in / AGMARKNET",
+      };
+    });
 }
 
-function toRadians(value: number): number {
-  return (value * Math.PI) / 180;
+function toRadians(
+  value: number,
+): number {
+  return (
+    (value * Math.PI) / 180
+  );
 }
 
 function calculateDistanceKm(
@@ -195,19 +474,29 @@ function calculateDistanceKm(
 ): number {
   const earthRadiusKm = 6371;
 
-  const latitudeDifference = toRadians(
-    latitude2 - latitude1,
-  );
+  const latitudeDifference =
+    toRadians(
+      latitude2 - latitude1,
+    );
 
-  const longitudeDifference = toRadians(
-    longitude2 - longitude1,
-  );
+  const longitudeDifference =
+    toRadians(
+      longitude2 - longitude1,
+    );
 
   const a =
-    Math.sin(latitudeDifference / 2) ** 2 +
-    Math.cos(toRadians(latitude1)) *
-      Math.cos(toRadians(latitude2)) *
-      Math.sin(longitudeDifference / 2) ** 2;
+    Math.sin(
+      latitudeDifference / 2,
+    ) ** 2 +
+    Math.cos(
+      toRadians(latitude1),
+    ) *
+      Math.cos(
+        toRadians(latitude2),
+      ) *
+      Math.sin(
+        longitudeDifference / 2,
+      ) ** 2;
 
   const c =
     2 *
@@ -227,7 +516,9 @@ export interface NearbyMarket {
   latitude: number;
   longitude: number;
   distance_km: number;
-  latest_modal_price_per_kg: number | null;
+  latest_modal_price_per_kg:
+    | number
+    | null;
   latest_date: string | null;
   source: string;
 }
@@ -247,7 +538,8 @@ function formatDate(
     date.getUTCMonth() + 1,
   ).padStart(2, "0");
 
-  const year = date.getUTCFullYear();
+  const year =
+    date.getUTCFullYear();
 
   return `${day}/${month}/${year}`;
 }
@@ -265,32 +557,40 @@ export async function getNearbyMarkets(
   const nearbyMarkets = markets
     .map((market) => ({
       market,
-      distanceKm: calculateDistanceKm(
-        latitude,
-        longitude,
-        market.latitude,
-        market.longitude,
-      ),
+      distanceKm:
+        calculateDistanceKm(
+          latitude,
+          longitude,
+          market.latitude,
+          market.longitude,
+        ),
     }))
     .filter(
-      (item) => item.distanceKm <= radiusKm,
+      (item) =>
+        item.distanceKm <=
+        radiusKm,
     )
     .sort(
       (a, b) =>
-        a.distanceKm - b.distanceKm,
+        a.distanceKm -
+        b.distanceKm,
     );
 
   if (nearbyMarkets.length === 0) {
     return [];
   }
 
-  const marketIds = nearbyMarkets.map(
-    (item) => item.market._id,
-  );
+  const marketIds =
+    nearbyMarkets.map(
+      (item) =>
+        item.market._id,
+    );
 
   const priceRecords =
     await MarketPriceModel.find({
-      market_id: { $in: marketIds },
+      market_id: {
+        $in: marketIds,
+      },
       commodity: crop,
     })
       .sort({
@@ -305,24 +605,30 @@ export async function getNearbyMarkets(
    * grades/varieties. We use the average modal price
    * for that latest date as the current market price.
    */
-  const latestPriceMap = new Map<
-    string,
-    {
-      date: Date;
-      modalPricePerKg: number;
-    }
-  >();
+  const latestPriceMap =
+    new Map<
+      string,
+      {
+        date: Date;
+        modalPricePerKg: number;
+      }
+    >();
 
-  const groupedByMarket = new Map<
-    string,
-    typeof priceRecords
-  >();
+  const groupedByMarket =
+    new Map<
+      string,
+      typeof priceRecords
+    >();
 
   for (const record of priceRecords) {
     const marketId =
       String(record.market_id);
 
-    if (!groupedByMarket.has(marketId)) {
+    if (
+      !groupedByMarket.has(
+        marketId,
+      )
+    ) {
       groupedByMarket.set(
         marketId,
         [],
@@ -357,33 +663,47 @@ export async function getNearbyMarkets(
         (sum, record) =>
           sum + record.modal_price,
         0,
-      ) / latestDayRecords.length;
+      ) /
+      latestDayRecords.length;
 
     latestPriceMap.set(
       marketId,
       {
         date: latestDate,
-        modalPricePerKg: Number(
-          (modalPriceAverage / 100).toFixed(2),
-        ),
+        modalPricePerKg:
+          Number(
+            (
+              modalPriceAverage /
+              100
+            ).toFixed(2),
+          ),
       },
     );
   }
 
   return nearbyMarkets.map(
-    ({ market, distanceKm }) => {
+    ({
+      market,
+      distanceKm,
+    }) => {
       const latestPrice =
         latestPriceMap.get(
           String(market._id),
         );
 
       return {
-        market_id: String(market._id),
-        market_name: market.market_name,
-        district: market.district,
-        state: market.state,
-        latitude: market.latitude,
-        longitude: market.longitude,
+        market_id:
+          String(market._id),
+        market_name:
+          market.market_name,
+        district:
+          market.district,
+        state:
+          market.state,
+        latitude:
+          market.latitude,
+        longitude:
+          market.longitude,
         distance_km: Number(
           distanceKm.toFixed(2),
         ),
@@ -392,7 +712,8 @@ export async function getNearbyMarkets(
           null,
         latest_date:
           formatDate(
-            latestPrice?.date ?? null,
+            latestPrice?.date ??
+              null,
           ),
         source: latestPrice
           ? "data.gov.in / AGMARKNET"
