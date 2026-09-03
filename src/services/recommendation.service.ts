@@ -3,7 +3,11 @@ import { Listing } from "../models/listing.model";
 import { Farmer } from "../models/farmer.model";
 import { Requirement } from "../models/requirement.model";
 import { getGovernmentBenchmark } from "./priceComparison.service";
-import { getMarketPriceHistory } from "./marketService";
+import {
+  getMarketPriceHistory,
+  getNearbyMarkets,
+} from "./marketService";
+import { getWeatherRisk } from "./weatherService";
 
 interface Coordinates {
   latitude: number;
@@ -24,10 +28,11 @@ interface RecommendationCandidate {
   latitude: number;
   longitude: number;
   offered_price_per_kg: number;
-  verified: boolean;
-  requirement_id: string;
-  quantity_needed_kg: number;
+  verified?: boolean;
+  requirement_id?: string;
+  quantity_needed_kg?: number;
   distance_km: number;
+  price_date?: string | null;
 }
 
 interface GovernmentPrice {
@@ -53,7 +58,8 @@ function getCoordinates(
     return null;
   }
 
-  const record = value as Record<string, unknown>;
+  const record =
+    value as Record<string, unknown>;
 
   const latitude = Number(record.latitude);
   const longitude = Number(record.longitude);
@@ -142,10 +148,13 @@ function formatGovernmentDate(
   );
 
   if (!Number.isNaN(parsedDate.getTime())) {
-    const year = parsedDate.getUTCFullYear();
+    const year =
+      parsedDate.getUTCFullYear();
+
     const month = String(
       parsedDate.getUTCMonth() + 1,
     ).padStart(2, "0");
+
     const day = String(
       parsedDate.getUTCDate(),
     ).padStart(2, "0");
@@ -336,6 +345,9 @@ export async function prepareRecommendationData(
   government_price: GovernmentPrice | null;
   price_history: PriceHistoryInfo | null;
   transport: TransportInfo;
+  weather: Awaited<
+    ReturnType<typeof getWeatherRisk>
+  > | null;
 }> {
   if (!mongoose.Types.ObjectId.isValid(listingId)) {
     throw new Error("Invalid listing_id");
@@ -392,6 +404,9 @@ export async function prepareRecommendationData(
 
   const maximumCandidateDistanceKm = 25;
 
+  /*
+   * Add eligible buyers.
+   */
   for (const requirement of requirements) {
     const buyer =
       requirement.buyer_id as unknown as PopulatedBuyer;
@@ -434,7 +449,51 @@ export async function prepareRecommendationData(
         requirement.quantity_needed,
       ),
       distance_km: distance,
+      price_date: null,
     });
+  }
+
+  /*
+   * Add nearby markets from the persistent
+   * markets + market_prices collections.
+   */
+  try {
+    const nearbyMarkets =
+      await getNearbyMarkets(
+        listing.crop_name,
+        farmerCoordinates.latitude,
+        farmerCoordinates.longitude,
+        maximumCandidateDistanceKm,
+      );
+
+    for (const market of nearbyMarkets) {
+      if (
+        market.latest_modal_price_per_kg ===
+          null ||
+        market.latest_date === null
+      ) {
+        continue;
+      }
+
+      candidates.push({
+        id: market.market_id,
+        name: market.market_name,
+        type: "market",
+        latitude: market.latitude,
+        longitude: market.longitude,
+        offered_price_per_kg:
+          market.latest_modal_price_per_kg,
+        distance_km:
+          market.distance_km,
+        price_date:
+          market.latest_date,
+      });
+    }
+  } catch (error) {
+    console.warn(
+      "Nearby market data unavailable for recommendation:",
+      error,
+    );
   }
 
   let governmentPrice:
@@ -491,6 +550,22 @@ export async function prepareRecommendationData(
       getTransportCostPerKmPerKg(),
   };
 
+  let weather:
+    | Awaited<ReturnType<typeof getWeatherRisk>>
+    | null = null;
+
+  try {
+    weather = await getWeatherRisk(
+      farmerCoordinates.latitude,
+      farmerCoordinates.longitude,
+    );
+  } catch (error) {
+    console.warn(
+      "Weather data unavailable for recommendation:",
+      error,
+    );
+  }
+
   return {
     farmer: {
       latitude:
@@ -515,5 +590,7 @@ export async function prepareRecommendationData(
       priceHistory,
 
     transport,
+
+    weather,
   };
 }
