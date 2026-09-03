@@ -10,6 +10,7 @@ export interface IBuyer extends Document {
   market_location: string;
   latitude: number;
   longitude: number;
+  verified: boolean;
 }
 
 const buyerSchema = new Schema<IBuyer>(
@@ -66,10 +67,25 @@ const buyerSchema = new Schema<IBuyer>(
       type: Number,
       required: true,
     },
+
+    /*
+     * Buyers are unverified by default.
+     *
+     * Verification should be performed by a real
+     * backend/admin process rather than assumed.
+     */
+    verified: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
   },
 );
 
-export const Buyer = mongoose.model<IBuyer>("Buyer", buyerSchema);
+export const Buyer =
+  mongoose.model<IBuyer>(
+    "Buyer",
+    buyerSchema,
+  );

@@ -2,7 +2,15 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { Listing } from "../models/listing.model";
 import { Farmer } from "../models/farmer.model";
-import { AuthRequest } from "../middleware/auth.middleware";
+import {
+  AuthRequest,
+} from "../middleware/auth.middleware";
+
+const VALID_URGENCY = [
+  "today",
+  "within_3_days",
+  "within_week",
+] as const;
 
 export async function createListing(
   req: AuthRequest,
@@ -21,6 +29,8 @@ export async function createListing(
       quantity,
       expected_price,
       image,
+      urgency,
+      storage_available,
     } = req.body;
 
     if (!crop_name || quantity === undefined) {
@@ -43,6 +53,27 @@ export async function createListing(
     ) {
       res.status(400).json({
         message: "Expected price cannot be negative",
+      });
+      return;
+    }
+
+    if (
+      urgency !== undefined &&
+      !VALID_URGENCY.includes(urgency)
+    ) {
+      res.status(400).json({
+        message:
+          "Invalid urgency. Use today, within_3_days, or within_week",
+      });
+      return;
+    }
+
+    if (
+      storage_available !== undefined &&
+      typeof storage_available !== "boolean"
+    ) {
+      res.status(400).json({
+        message: "storage_available must be a boolean",
       });
       return;
     }
@@ -74,6 +105,14 @@ export async function createListing(
           ? Number(expected_price)
           : undefined,
       image,
+      urgency:
+        urgency !== undefined
+          ? urgency
+          : "within_week",
+      storage_available:
+        storage_available !== undefined
+          ? storage_available
+          : false,
     });
 
     res.status(201).json({

@@ -8,6 +8,9 @@ import {
   getNearbyMarkets,
 } from "./marketService";
 import { getWeatherRisk } from "./weatherService";
+import {
+  getDemandIntelligence,
+} from "./demandService";
 
 interface Coordinates {
   latitude: number;
@@ -19,6 +22,7 @@ interface PopulatedBuyer {
   name: string;
   latitude?: number;
   longitude?: number;
+  verified?: boolean;
 }
 
 interface RecommendationCandidate {
@@ -46,9 +50,26 @@ interface TransportInfo {
 }
 
 interface PriceHistoryInfo {
-  trend: "rising" | "falling" | "stable" | "unknown";
+  trend:
+    | "rising"
+    | "falling"
+    | "stable"
+    | "unknown";
   average_price_per_kg: number;
   history_days: number;
+}
+
+interface DemandRecommendationInfo {
+  level: "low" | "medium" | "high";
+  trend:
+    | "decreasing"
+    | "stable"
+    | "increasing";
+  buyer_count: number;
+  total_quantity_needed_kg: number;
+  recent_quantity_needed_kg: number;
+  previous_quantity_needed_kg: number;
+  source: string;
 }
 
 function getCoordinates(
@@ -61,8 +82,13 @@ function getCoordinates(
   const record =
     value as Record<string, unknown>;
 
-  const latitude = Number(record.latitude);
-  const longitude = Number(record.longitude);
+  const latitude = Number(
+    record.latitude,
+  );
+
+  const longitude = Number(
+    record.longitude,
+  );
 
   if (
     !Number.isFinite(latitude) ||
@@ -88,18 +114,22 @@ function calculateDistanceKm(
   const earthRadiusKm = 6371;
 
   const latitudeDifference =
-    ((second.latitude - first.latitude) * Math.PI) /
+    ((second.latitude - first.latitude) *
+      Math.PI) /
     180;
 
   const longitudeDifference =
-    ((second.longitude - first.longitude) * Math.PI) /
+    ((second.longitude - first.longitude) *
+      Math.PI) /
     180;
 
   const firstLatitude =
-    (first.latitude * Math.PI) / 180;
+    (first.latitude * Math.PI) /
+    180;
 
   const secondLatitude =
-    (second.latitude * Math.PI) / 180;
+    (second.latitude * Math.PI) /
+    180;
 
   const a =
     Math.sin(latitudeDifference / 2) ** 2 +
@@ -293,7 +323,9 @@ function calculatePriceHistory(
     | "stable"
     | "unknown";
 
-  if (latestAverage > previousAverage) {
+  if (
+    latestAverage > previousAverage
+  ) {
     trend = "rising";
   } else if (
     latestAverage < previousAverage
@@ -317,7 +349,9 @@ function getTransportCostPerKmPerKg(): number {
   );
 
   if (
-    !Number.isFinite(configuredValue) ||
+    !Number.isFinite(
+      configuredValue,
+    ) ||
     configuredValue < 0
   ) {
     throw new Error(
@@ -328,6 +362,27 @@ function getTransportCostPerKmPerKg(): number {
   return configuredValue;
 }
 
+function mapListingUrgency(
+  urgency:
+    | "today"
+    | "within_3_days"
+    | "within_week",
+): "low" | "medium" | "high" {
+  switch (urgency) {
+    case "today":
+      return "high";
+
+    case "within_3_days":
+      return "medium";
+
+    case "within_week":
+      return "low";
+
+    default:
+      return "medium";
+  }
+}
+
 export async function prepareRecommendationData(
   listingId: string,
 ): Promise<{
@@ -336,29 +391,51 @@ export async function prepareRecommendationData(
     longitude: number;
     district: string;
     state: string;
+    urgency: "low" | "medium" | "high";
   };
   crop: {
     name: string;
     quantity_kg: number;
   };
+  crop_properties: {
+    storage_available: boolean;
+  };
   candidates: RecommendationCandidate[];
-  government_price: GovernmentPrice | null;
-  price_history: PriceHistoryInfo | null;
+  government_price:
+    | GovernmentPrice
+    | null;
+  price_history:
+    | PriceHistoryInfo
+    | null;
+  demand:
+    | DemandRecommendationInfo
+    | null;
   transport: TransportInfo;
-  weather: Awaited<
-    ReturnType<typeof getWeatherRisk>
-  > | null;
+  weather:
+    | Awaited<
+        ReturnType<typeof getWeatherRisk>
+      >
+    | null;
 }> {
-  if (!mongoose.Types.ObjectId.isValid(listingId)) {
-    throw new Error("Invalid listing_id");
+  if (
+    !mongoose.Types.ObjectId.isValid(
+      listingId,
+    )
+  ) {
+    throw new Error(
+      "Invalid listing_id",
+    );
   }
 
-  const listing = await Listing.findById(
-    listingId,
-  );
+  const listing =
+    await Listing.findById(
+      listingId,
+    );
 
   if (!listing) {
-    throw new Error("Listing not found");
+    throw new Error(
+      "Listing not found",
+    );
   }
 
   if (listing.status !== "active") {
@@ -367,13 +444,16 @@ export async function prepareRecommendationData(
     );
   }
 
-  const farmer = await Farmer.findById(
-    listing.farmer_id,
-    "-password",
-  );
+  const farmer =
+    await Farmer.findById(
+      listing.farmer_id,
+      "-password",
+    );
 
   if (!farmer) {
-    throw new Error("Farmer not found");
+    throw new Error(
+      "Farmer not found",
+    );
   }
 
   const farmerCoordinates =
@@ -402,14 +482,21 @@ export async function prepareRecommendationData(
   const candidates: RecommendationCandidate[] =
     [];
 
+  /*
+   * Buyer matching currently uses a 25 km
+   * recommendation radius.
+   */
   const maximumCandidateDistanceKm = 25;
 
   /*
-   * Add eligible buyers.
+   * Add buyer candidates.
    */
-  for (const requirement of requirements) {
+  for (
+    const requirement of requirements
+  ) {
     const buyer =
-      requirement.buyer_id as unknown as PopulatedBuyer;
+      requirement.buyer_id as unknown as
+        PopulatedBuyer;
 
     const buyerCoordinates =
       getCoordinates(buyer);
@@ -439,23 +526,25 @@ export async function prepareRecommendationData(
         buyerCoordinates.latitude,
       longitude:
         buyerCoordinates.longitude,
-      offered_price_per_kg: Number(
-        requirement.offered_price,
-      ),
-      verified: true,
+      offered_price_per_kg:
+        Number(
+          requirement.offered_price,
+        ),
+      verified:
+        buyer.verified === true,
       requirement_id:
         requirement._id.toString(),
-      quantity_needed_kg: Number(
-        requirement.quantity_needed,
-      ),
+      quantity_needed_kg:
+        Number(
+          requirement.quantity_needed,
+        ),
       distance_km: distance,
       price_date: null,
     });
   }
 
   /*
-   * Add nearby markets from the persistent
-   * markets + market_prices collections.
+   * Add nearby market candidates.
    */
   try {
     const nearbyMarkets =
@@ -466,7 +555,9 @@ export async function prepareRecommendationData(
         maximumCandidateDistanceKm,
       );
 
-    for (const market of nearbyMarkets) {
+    for (
+      const market of nearbyMarkets
+    ) {
       if (
         market.latest_modal_price_per_kg ===
           null ||
@@ -479,8 +570,10 @@ export async function prepareRecommendationData(
         id: market.market_id,
         name: market.market_name,
         type: "market",
-        latitude: market.latitude,
-        longitude: market.longitude,
+        latitude:
+          market.latitude,
+        longitude:
+          market.longitude,
         offered_price_per_kg:
           market.latest_modal_price_per_kg,
         distance_km:
@@ -496,6 +589,9 @@ export async function prepareRecommendationData(
     );
   }
 
+  /*
+   * Government benchmark.
+   */
   let governmentPrice:
     | GovernmentPrice
     | null = null;
@@ -523,6 +619,9 @@ export async function prepareRecommendationData(
     );
   }
 
+  /*
+   * Historical price intelligence.
+   */
   let priceHistory:
     | PriceHistoryInfo
     | null = null;
@@ -537,7 +636,9 @@ export async function prepareRecommendationData(
       );
 
     priceHistory =
-      calculatePriceHistory(history);
+      calculatePriceHistory(
+        history,
+      );
   } catch (error) {
     console.warn(
       "Price history unavailable for recommendation:",
@@ -545,13 +646,61 @@ export async function prepareRecommendationData(
     );
   }
 
+  /*
+   * Marketplace demand intelligence.
+   *
+   * This is derived from buyer requirements
+   * rather than being fabricated or treated as
+   * an official government demand statistic.
+   */
+  let demand:
+    | DemandRecommendationInfo
+    | null = null;
+
+  try {
+    const demandData =
+      await getDemandIntelligence(
+        listing.crop_name,
+        farmer.state,
+        farmer.district,
+        listing.quantity,
+      );
+
+    demand = {
+      level: demandData.level,
+      trend: demandData.trend,
+      buyer_count:
+        demandData.buyer_count,
+      total_quantity_needed_kg:
+        demandData.total_quantity_needed_kg,
+      recent_quantity_needed_kg:
+        demandData.recent_quantity_needed_kg,
+      previous_quantity_needed_kg:
+        demandData.previous_quantity_needed_kg,
+      source: demandData.source,
+    };
+  } catch (error) {
+    console.warn(
+      "Demand intelligence unavailable for recommendation:",
+      error,
+    );
+  }
+
+  /*
+   * Transport configuration.
+   */
   const transport: TransportInfo = {
     cost_per_km_per_kg:
       getTransportCostPerKmPerKg(),
   };
 
+  /*
+   * Weather.
+   */
   let weather:
-    | Awaited<ReturnType<typeof getWeatherRisk>>
+    | Awaited<
+        ReturnType<typeof getWeatherRisk>
+      >
     | null = null;
 
   try {
@@ -572,13 +721,26 @@ export async function prepareRecommendationData(
         farmerCoordinates.latitude,
       longitude:
         farmerCoordinates.longitude,
-      district: farmer.district,
-      state: farmer.state,
+      district:
+        farmer.district,
+      state:
+        farmer.state,
+      urgency:
+        mapListingUrgency(
+          listing.urgency,
+        ),
     },
 
     crop: {
-      name: listing.crop_name,
-      quantity_kg: listing.quantity,
+      name:
+        listing.crop_name,
+      quantity_kg:
+        listing.quantity,
+    },
+
+    crop_properties: {
+      storage_available:
+        listing.storage_available,
     },
 
     candidates,
@@ -588,6 +750,8 @@ export async function prepareRecommendationData(
 
     price_history:
       priceHistory,
+
+    demand,
 
     transport,
 
