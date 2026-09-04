@@ -6,10 +6,13 @@ import {
   Phone,
   MapPin,
   Map,
+  LockKeyhole,
   CheckCircle2,
 } from "lucide-react";
 
 import { useNavigate } from "react-router-dom";
+
+import { apiPost } from "../services/api";
 
 
 export default function FarmerRegistration() {
@@ -18,12 +21,16 @@ export default function FarmerRegistration() {
   const [formData, setFormData] = useState({
     name: "",
     phone: "",
+    password: "",
     state: "",
     district: "",
     currentLocation: "",
     farmLocation: "",
     language: "English",
   });
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
 
   const handleChange = (
@@ -38,29 +45,109 @@ export default function FarmerRegistration() {
   };
 
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
 
-    /* =========================================
-       FRONTEND DEMO STORAGE
-       Backend can replace this later
-    ========================================= */
+    setLoading(true);
+    setError("");
 
-    localStorage.setItem(
-      "farmerUser",
-      JSON.stringify(formData)
+    // Check browser GPS support
+    if (!navigator.geolocation) {
+      setError(
+        "Location services are not supported by this browser."
+      );
+      setLoading(false);
+      return;
+    }
+
+    // Capture farmer's real GPS location
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const latitude = position.coords.latitude;
+          const longitude = position.coords.longitude;
+
+          // Send registration data to backend
+          const response = await apiPost<any>(
+            "/api/farmer/register",
+            {
+              name: formData.name,
+              phone: formData.phone,
+              password: formData.password,
+              state: formData.state,
+              district: formData.district,
+
+              // Backend location field
+              location:
+                formData.currentLocation ||
+                formData.farmLocation,
+
+              latitude,
+              longitude,
+            }
+          );
+
+          console.log(
+            "Farmer registration successful:",
+            response
+          );
+
+          // Store farmer information locally for frontend use
+          localStorage.setItem(
+            "farmerUser",
+            JSON.stringify({
+              ...formData,
+              latitude,
+              longitude,
+            })
+          );
+
+          localStorage.setItem(
+            "farmerName",
+            formData.name
+          );
+
+          // If backend provides a JWT token, save it
+          if (response?.token) {
+            localStorage.setItem(
+              "farmerToken",
+              response.token
+            );
+          }
+
+          // Go to dashboard after successful registration
+          navigate("/farmer/dashboard");
+
+        } catch (err) {
+          console.error(
+            "Farmer registration failed:",
+            err
+          );
+
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Registration failed. Please try again."
+          );
+
+        } finally {
+          setLoading(false);
+        }
+      },
+
+      (geoError) => {
+        console.error(
+          "Location error:",
+          geoError
+        );
+
+        setError(
+          "Location permission is required. Please allow location access and try again."
+        );
+
+        setLoading(false);
+      }
     );
-
-    localStorage.setItem(
-      "farmerName",
-      formData.name
-    );
-
-    /* =========================================
-       GO TO FARMER DASHBOARD
-    ========================================= */
-
-    navigate("/farmer/dashboard");
   };
 
 
@@ -164,6 +251,33 @@ export default function FarmerRegistration() {
                   name="phone"
                   placeholder="Enter phone number"
                   value={formData.phone}
+                  onChange={handleChange}
+                  required
+                />
+
+              </div>
+
+            </div>
+
+
+            {/* PASSWORD */}
+
+            <div className="form-group">
+
+              <label htmlFor="password">
+                Password
+              </label>
+
+              <div className="input-with-icon">
+
+                <LockKeyhole size={18} />
+
+                <input
+                  id="password"
+                  type="password"
+                  name="password"
+                  placeholder="Create a password"
+                  value={formData.password}
                   onChange={handleChange}
                   required
                 />
@@ -283,6 +397,7 @@ export default function FarmerRegistration() {
                 value={formData.language}
                 onChange={handleChange}
               >
+
                 <option value="English">
                   English
                 </option>
@@ -298,6 +413,7 @@ export default function FarmerRegistration() {
                 <option value="Hindi">
                   Hindi
                 </option>
+
               </select>
 
             </div>
@@ -322,16 +438,42 @@ export default function FarmerRegistration() {
 
 
           {/* =====================================
+              ERROR MESSAGE
+          ===================================== */}
+
+          {error && (
+            <div
+              style={{
+                marginTop: "16px",
+                marginBottom: "16px",
+                padding: "12px 16px",
+                borderRadius: "8px",
+                background: "#fee2e2",
+                color: "#991b1b",
+                fontSize: "14px",
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+
+          {/* =====================================
               SUBMIT
           ===================================== */}
 
           <button
             type="submit"
             className="registration-submit"
+            disabled={loading}
           >
+
             <CheckCircle2 size={19} />
 
-            Create Farmer Account
+            {loading
+              ? "Creating Account..."
+              : "Create Farmer Account"}
+
           </button>
 
 
