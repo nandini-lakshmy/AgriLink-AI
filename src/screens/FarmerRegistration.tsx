@@ -8,15 +8,160 @@ import {
   Map,
   LockKeyhole,
   CheckCircle2,
+  AlertCircle,
+  Loader2,
 } from "lucide-react";
 
 import { useNavigate } from "react-router-dom";
 
 import { apiPost } from "../services/api";
 
+/* =========================================================
+   TYPES
+========================================================= */
+
+interface FarmerData {
+  id?: string;
+  _id?: string;
+  name?: string;
+  phone?: string;
+  state?: string;
+  district?: string;
+  location?: string;
+  currentLocation?: string;
+  farmLocation?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
+interface AuthResponse {
+  token?: string;
+  accessToken?: string;
+  access_token?: string;
+
+  farmer?: FarmerData;
+  user?: FarmerData;
+
+  data?: {
+    token?: string;
+    accessToken?: string;
+    access_token?: string;
+    farmer?: FarmerData;
+    user?: FarmerData;
+  };
+
+  message?: string;
+
+  [key: string]: unknown;
+}
+
+/* =========================================================
+   FIND TOKEN FROM BACKEND RESPONSE
+========================================================= */
+
+function findToken(data: unknown): string | null {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  const obj = data as Record<string, unknown>;
+
+  /* Direct token */
+  const directToken =
+    obj.token ||
+    obj.accessToken ||
+    obj.access_token;
+
+  if (
+    typeof directToken === "string" &&
+    directToken.trim()
+  ) {
+    return directToken.trim();
+  }
+
+  /* Nested data */
+  if (obj.data && typeof obj.data === "object") {
+    const nestedToken = findToken(obj.data);
+
+    if (nestedToken) {
+      return nestedToken;
+    }
+  }
+
+  /* Nested farmer */
+  if (
+    obj.farmer &&
+    typeof obj.farmer === "object"
+  ) {
+    const farmerToken = findToken(obj.farmer);
+
+    if (farmerToken) {
+      return farmerToken;
+    }
+  }
+
+  /* Nested user */
+  if (
+    obj.user &&
+    typeof obj.user === "object"
+  ) {
+    const userToken = findToken(obj.user);
+
+    if (userToken) {
+      return userToken;
+    }
+  }
+
+  return null;
+}
+
+/* =========================================================
+   FIND FARMER DATA FROM BACKEND RESPONSE
+========================================================= */
+
+function findFarmerData(
+  data: unknown
+): FarmerData | null {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  const obj = data as Record<string, unknown>;
+
+  if (
+    obj.farmer &&
+    typeof obj.farmer === "object"
+  ) {
+    return obj.farmer as FarmerData;
+  }
+
+  if (
+    obj.user &&
+    typeof obj.user === "object"
+  ) {
+    return obj.user as FarmerData;
+  }
+
+  if (
+    obj.data &&
+    typeof obj.data === "object"
+  ) {
+    return findFarmerData(obj.data);
+  }
+
+  return null;
+}
+
+/* =========================================================
+   FARMER REGISTRATION
+========================================================= */
 
 export default function FarmerRegistration() {
   const navigate = useNavigate();
+
+  /* =======================================================
+     FORM DATA
+  ======================================================= */
 
   const [formData, setFormData] = useState({
     name: "",
@@ -29,9 +174,17 @@ export default function FarmerRegistration() {
     language: "English",
   });
 
+  /* =======================================================
+     STATES
+  ======================================================= */
+
   const [loading, setLoading] = useState(false);
+
   const [error, setError] = useState("");
 
+  /* =======================================================
+     HANDLE INPUT CHANGE
+  ======================================================= */
 
   const handleChange = (
     e: React.ChangeEvent<
@@ -44,84 +197,387 @@ export default function FarmerRegistration() {
     });
   };
 
+  /* =======================================================
+     SAVE AUTHENTICATION INFORMATION
+  ======================================================= */
 
-  const handleSubmit = async (e: FormEvent) => {
+  const saveFarmerSession = (
+    token: string,
+    farmerData?: FarmerData | null
+  ) => {
+    /* -----------------------------------------------
+       Save JWT
+    ------------------------------------------------ */
+
+    localStorage.setItem(
+      "farmerToken",
+      token
+    );
+
+    /* -----------------------------------------------
+       Save common token names too
+       This keeps other frontend screens compatible.
+    ------------------------------------------------ */
+
+    localStorage.setItem(
+      "accessToken",
+      token
+    );
+
+    localStorage.setItem(
+      "access_token",
+      token
+    );
+
+    localStorage.setItem(
+      "token",
+      token
+    );
+
+    /* -----------------------------------------------
+       Save login status
+    ------------------------------------------------ */
+
+    localStorage.setItem(
+      "farmerLoggedIn",
+      "true"
+    );
+
+    /* -----------------------------------------------
+       Save farmer information
+    ------------------------------------------------ */
+
+    const finalFarmerData: FarmerData = {
+      ...formData,
+      ...(farmerData || {}),
+      latitude:
+        farmerData?.latitude,
+      longitude:
+        farmerData?.longitude,
+    };
+
+    localStorage.setItem(
+      "farmerUser",
+      JSON.stringify(finalFarmerData)
+    );
+
+    /* -----------------------------------------------
+       Save farmer name
+    ------------------------------------------------ */
+
+    localStorage.setItem(
+      "farmerName",
+      farmerData?.name ||
+        formData.name
+    );
+  };
+
+  /* =======================================================
+     SUBMIT REGISTRATION
+  ======================================================= */
+
+  const handleSubmit = async (
+    e: FormEvent
+  ) => {
     e.preventDefault();
 
-    setLoading(true);
     setError("");
 
-    // Check browser GPS support
+    /* -----------------------------------------------
+       Basic validation
+    ------------------------------------------------ */
+
+    if (!formData.name.trim()) {
+      setError(
+        "Please enter your full name."
+      );
+      return;
+    }
+
+    if (!formData.phone.trim()) {
+      setError(
+        "Please enter your phone number."
+      );
+      return;
+    }
+
+    if (!formData.password) {
+      setError(
+        "Please create a password."
+      );
+      return;
+    }
+
+    if (formData.password.length < 6) {
+      setError(
+        "Password must contain at least 6 characters."
+      );
+      return;
+    }
+
+    if (!formData.state.trim()) {
+      setError(
+        "Please enter your state."
+      );
+      return;
+    }
+
+    if (!formData.district.trim()) {
+      setError(
+        "Please enter your district."
+      );
+      return;
+    }
+
+    if (!formData.currentLocation.trim()) {
+      setError(
+        "Please enter your current location."
+      );
+      return;
+    }
+
+    if (!formData.farmLocation.trim()) {
+      setError(
+        "Please enter your farm location."
+      );
+      return;
+    }
+
+    /* -----------------------------------------------
+       Start loading
+    ------------------------------------------------ */
+
+    setLoading(true);
+
+    /* -----------------------------------------------
+       Check browser GPS support
+    ------------------------------------------------ */
+
     if (!navigator.geolocation) {
       setError(
         "Location services are not supported by this browser."
       );
+
       setLoading(false);
+
       return;
     }
 
-    // Capture farmer's real GPS location
+    /* -----------------------------------------------
+       Get REAL GPS location
+    ------------------------------------------------ */
+
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         try {
-          const latitude = position.coords.latitude;
-          const longitude = position.coords.longitude;
+          const latitude =
+            position.coords.latitude;
 
-          // Send registration data to backend
-          const response = await apiPost<any>(
-            "/api/farmer/register",
-            {
-              name: formData.name,
-              phone: formData.phone,
-              password: formData.password,
-              state: formData.state,
-              district: formData.district,
+          const longitude =
+            position.coords.longitude;
 
-              // Backend location field
-              location:
-                formData.currentLocation ||
-                formData.farmLocation,
+          console.log(
+            "Farmer GPS location:",
+            latitude,
+            longitude
+          );
 
-              latitude,
-              longitude,
-            }
+          /* =================================================
+             REGISTER FARMER
+          ================================================= */
+
+          const response =
+            await apiPost<AuthResponse>(
+              "/api/farmer/register",
+              {
+                name: formData.name.trim(),
+
+                phone: formData.phone.trim(),
+
+                password: formData.password,
+
+                state: formData.state.trim(),
+
+                district:
+                  formData.district.trim(),
+
+                /*
+                 * Backend expects one location field.
+                 */
+                location:
+                  formData.currentLocation.trim() ||
+                  formData.farmLocation.trim(),
+
+                /*
+                 * Real browser GPS
+                 */
+                latitude,
+
+                longitude,
+              }
+            );
+
+          console.log(
+            "================================="
           );
 
           console.log(
-            "Farmer registration successful:",
+            "FARMER REGISTRATION RESPONSE"
+          );
+
+          console.log(
             response
           );
 
-          // Store farmer information locally for frontend use
-          localStorage.setItem(
-            "farmerUser",
-            JSON.stringify({
-              ...formData,
-              latitude,
-              longitude,
-            })
+          console.log(
+            "================================="
           );
 
-          localStorage.setItem(
-            "farmerName",
-            formData.name
-          );
+          /* =================================================
+             TRY TO GET TOKEN FROM REGISTRATION RESPONSE
+          ================================================= */
 
-          // If backend provides a JWT token, save it
-          if (response?.token) {
-            localStorage.setItem(
-              "farmerToken",
-              response.token
+          let token =
+            findToken(response);
+
+          /* =================================================
+             GET FARMER DATA
+          ================================================= */
+
+          const farmerData =
+            findFarmerData(response);
+
+          /* =================================================
+             IF REGISTRATION RETURNS TOKEN
+          ================================================= */
+
+          if (token) {
+            console.log(
+              "Registration returned JWT token."
+            );
+
+            saveFarmerSession(
+              token,
+              farmerData
             );
           }
 
-          // Go to dashboard after successful registration
-          navigate("/farmer/dashboard");
+          /* =================================================
+             IF REGISTRATION DOES NOT RETURN TOKEN
+             
+             Automatically login using the newly
+             registered phone + password.
+          ================================================= */
+
+          if (!token) {
+            console.log(
+              "Registration did not return a token."
+            );
+
+            console.log(
+              "Attempting automatic farmer login..."
+            );
+
+            const loginResponse =
+              await apiPost<AuthResponse>(
+                "/api/farmer/login",
+                {
+                  phone:
+                    formData.phone.trim(),
+
+                  password:
+                    formData.password,
+                }
+              );
+
+            console.log(
+              "Automatic login response:",
+              loginResponse
+            );
+
+            token =
+              findToken(loginResponse);
+
+            const loggedInFarmer =
+              findFarmerData(
+                loginResponse
+              );
+
+            if (
+              token
+            ) {
+              saveFarmerSession(
+                token,
+                loggedInFarmer ||
+                  farmerData
+              );
+            }
+          }
+
+          /* =================================================
+             FINAL TOKEN VERIFICATION
+          ================================================= */
+
+          const savedToken =
+            localStorage.getItem(
+              "farmerToken"
+            );
+
+          if (!savedToken) {
+            throw new Error(
+              "Account was created, but we could not create the login session. Please go to Farmer Login and sign in once."
+            );
+          }
+
+          /* =================================================
+             FINAL LOG
+          ================================================= */
+
+          console.log(
+            "================================="
+          );
+
+          console.log(
+            "FARMER REGISTRATION COMPLETE"
+          );
+
+          console.log(
+            "farmerToken saved:",
+            !!savedToken
+          );
+
+          console.log(
+            "farmerName:",
+            localStorage.getItem(
+              "farmerName"
+            )
+          );
+
+          console.log(
+            "================================="
+          );
+
+          /* =================================================
+             GO TO DASHBOARD
+          ================================================= */
+
+          navigate(
+            "/farmer/dashboard"
+          );
 
         } catch (err) {
           console.error(
-            "Farmer registration failed:",
-            err
+            "================================="
+          );
+
+          console.error(
+            "FARMER REGISTRATION FAILED"
+          );
+
+          console.error(err);
+
+          console.error(
+            "================================="
           );
 
           setError(
@@ -129,11 +585,14 @@ export default function FarmerRegistration() {
               ? err.message
               : "Registration failed. Please try again."
           );
-
         } finally {
           setLoading(false);
         }
       },
+
+      /* =====================================================
+         GPS ERROR
+      ===================================================== */
 
       (geoError) => {
         console.error(
@@ -141,39 +600,81 @@ export default function FarmerRegistration() {
           geoError
         );
 
-        setError(
-          "Location permission is required. Please allow location access and try again."
-        );
+        let message =
+          "Location permission is required. Please allow location access and try again.";
+
+        if (
+          geoError.code ===
+          geoError.PERMISSION_DENIED
+        ) {
+          message =
+            "Location permission was denied. Please allow location access in your browser and try again.";
+        }
+
+        if (
+          geoError.code ===
+          geoError.POSITION_UNAVAILABLE
+        ) {
+          message =
+            "Your current location could not be determined. Please check your device location settings and try again.";
+        }
+
+        if (
+          geoError.code ===
+          geoError.TIMEOUT
+        ) {
+          message =
+            "Getting your location took too long. Please try again.";
+        }
+
+        setError(message);
 
         setLoading(false);
+      },
+
+      /* =====================================================
+         GPS OPTIONS
+      ===================================================== */
+
+      {
+        enableHighAccuracy: true,
+
+        timeout: 15000,
+
+        maximumAge: 0,
       }
     );
   };
 
+  /* =========================================================
+     UI
+  ========================================================= */
 
   return (
     <div className="registration-page">
 
       <div className="registration-card">
 
-
-        {/* =====================================
+        {/* ===================================================
             BACK BUTTON
-        ===================================== */}
+        =================================================== */}
 
         <button
           type="button"
           className="back-button"
-          onClick={() => navigate("/")}
+          onClick={() =>
+            navigate("/")
+          }
+          disabled={loading}
         >
           <ArrowLeft size={18} />
+
           Back to Home
         </button>
 
-
-        {/* =====================================
+        {/* ===================================================
             HEADER
-        ===================================== */}
+        =================================================== */}
 
         <div className="registration-header">
 
@@ -196,17 +697,19 @@ export default function FarmerRegistration() {
 
         </div>
 
-
-        {/* =====================================
+        {/* ===================================================
             REGISTRATION FORM
-        ===================================== */}
+        =================================================== */}
 
-        <form onSubmit={handleSubmit}>
+        <form
+          onSubmit={handleSubmit}
+        >
 
           <div className="form-grid">
 
-
-            {/* FULL NAME */}
+            {/* =================================================
+                FULL NAME
+            ================================================= */}
 
             <div className="form-group">
 
@@ -224,7 +727,10 @@ export default function FarmerRegistration() {
                   name="name"
                   placeholder="Enter your full name"
                   value={formData.name}
-                  onChange={handleChange}
+                  onChange={
+                    handleChange
+                  }
+                  disabled={loading}
                   required
                 />
 
@@ -232,8 +738,9 @@ export default function FarmerRegistration() {
 
             </div>
 
-
-            {/* PHONE */}
+            {/* =================================================
+                PHONE
+            ================================================= */}
 
             <div className="form-group">
 
@@ -251,7 +758,10 @@ export default function FarmerRegistration() {
                   name="phone"
                   placeholder="Enter phone number"
                   value={formData.phone}
-                  onChange={handleChange}
+                  onChange={
+                    handleChange
+                  }
+                  disabled={loading}
                   required
                 />
 
@@ -259,8 +769,9 @@ export default function FarmerRegistration() {
 
             </div>
 
-
-            {/* PASSWORD */}
+            {/* =================================================
+                PASSWORD
+            ================================================= */}
 
             <div className="form-group">
 
@@ -277,8 +788,13 @@ export default function FarmerRegistration() {
                   type="password"
                   name="password"
                   placeholder="Create a password"
-                  value={formData.password}
-                  onChange={handleChange}
+                  value={
+                    formData.password
+                  }
+                  onChange={
+                    handleChange
+                  }
+                  disabled={loading}
                   required
                 />
 
@@ -286,8 +802,9 @@ export default function FarmerRegistration() {
 
             </div>
 
-
-            {/* STATE */}
+            {/* =================================================
+                STATE
+            ================================================= */}
 
             <div className="form-group">
 
@@ -300,15 +817,21 @@ export default function FarmerRegistration() {
                 type="text"
                 name="state"
                 placeholder="e.g. Kerala"
-                value={formData.state}
-                onChange={handleChange}
+                value={
+                  formData.state
+                }
+                onChange={
+                  handleChange
+                }
+                disabled={loading}
                 required
               />
 
             </div>
 
-
-            {/* DISTRICT */}
+            {/* =================================================
+                DISTRICT
+            ================================================= */}
 
             <div className="form-group">
 
@@ -321,15 +844,21 @@ export default function FarmerRegistration() {
                 type="text"
                 name="district"
                 placeholder="e.g. Ernakulam"
-                value={formData.district}
-                onChange={handleChange}
+                value={
+                  formData.district
+                }
+                onChange={
+                  handleChange
+                }
+                disabled={loading}
                 required
               />
 
             </div>
 
-
-            {/* CURRENT LOCATION */}
+            {/* =================================================
+                CURRENT LOCATION
+            ================================================= */}
 
             <div className="form-group">
 
@@ -346,8 +875,13 @@ export default function FarmerRegistration() {
                   type="text"
                   name="currentLocation"
                   placeholder="Enter current location"
-                  value={formData.currentLocation}
-                  onChange={handleChange}
+                  value={
+                    formData.currentLocation
+                  }
+                  onChange={
+                    handleChange
+                  }
+                  disabled={loading}
                   required
                 />
 
@@ -355,8 +889,9 @@ export default function FarmerRegistration() {
 
             </div>
 
-
-            {/* FARM LOCATION */}
+            {/* =================================================
+                FARM LOCATION
+            ================================================= */}
 
             <div className="form-group">
 
@@ -373,8 +908,13 @@ export default function FarmerRegistration() {
                   type="text"
                   name="farmLocation"
                   placeholder="Enter farm location"
-                  value={formData.farmLocation}
-                  onChange={handleChange}
+                  value={
+                    formData.farmLocation
+                  }
+                  onChange={
+                    handleChange
+                  }
+                  disabled={loading}
                   required
                 />
 
@@ -382,8 +922,9 @@ export default function FarmerRegistration() {
 
             </div>
 
-
-            {/* LANGUAGE */}
+            {/* =================================================
+                LANGUAGE
+            ================================================= */}
 
             <div className="form-group">
 
@@ -394,8 +935,13 @@ export default function FarmerRegistration() {
               <select
                 id="language"
                 name="language"
-                value={formData.language}
-                onChange={handleChange}
+                value={
+                  formData.language
+                }
+                onChange={
+                  handleChange
+                }
+                disabled={loading}
               >
 
                 <option value="English">
@@ -420,10 +966,9 @@ export default function FarmerRegistration() {
 
           </div>
 
-
-          {/* =====================================
+          {/* ===================================================
               LOCATION INFORMATION
-          ===================================== */}
+          =================================================== */}
 
           <div className="location-note">
 
@@ -431,36 +976,54 @@ export default function FarmerRegistration() {
 
             <span>
               Your location helps us find nearby
-              buyers and markets.
+              buyers and markets. GPS coordinates
+              will be captured automatically.
             </span>
 
           </div>
 
-
-          {/* =====================================
+          {/* ===================================================
               ERROR MESSAGE
-          ===================================== */}
+          =================================================== */}
 
           {error && (
+
             <div
               style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
                 marginTop: "16px",
                 marginBottom: "16px",
                 padding: "12px 16px",
                 borderRadius: "8px",
                 background: "#fee2e2",
+                border:
+                  "1px solid #fecaca",
                 color: "#991b1b",
                 fontSize: "14px",
+                lineHeight: 1.4,
               }}
             >
-              {error}
+
+              <AlertCircle
+                size={18}
+                style={{
+                  flexShrink: 0,
+                }}
+              />
+
+              <span>
+                {error}
+              </span>
+
             </div>
+
           )}
 
-
-          {/* =====================================
-              SUBMIT
-          ===================================== */}
+          {/* ===================================================
+              SUBMIT BUTTON
+          =================================================== */}
 
           <button
             type="submit"
@@ -468,18 +1031,29 @@ export default function FarmerRegistration() {
             disabled={loading}
           >
 
-            <CheckCircle2 size={19} />
+            {loading ? (
+              <>
+                <Loader2
+                  size={19}
+                />
 
-            {loading
-              ? "Creating Account..."
-              : "Create Farmer Account"}
+                Creating Account...
+              </>
+            ) : (
+              <>
+                <CheckCircle2
+                  size={19}
+                />
+
+                Create Farmer Account
+              </>
+            )}
 
           </button>
 
-
-          {/* =====================================
+          {/* ===================================================
               LOGIN
-          ===================================== */}
+          =================================================== */}
 
           <div className="registration-login">
 
@@ -490,8 +1064,11 @@ export default function FarmerRegistration() {
             <button
               type="button"
               onClick={() =>
-                navigate("/farmer/login")
+                navigate(
+                  "/farmer/login"
+                )
               }
+              disabled={loading}
             >
               Login as Farmer
             </button>

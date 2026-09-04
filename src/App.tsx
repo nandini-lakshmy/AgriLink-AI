@@ -22,6 +22,7 @@ import FarmerRegistration from "./screens/FarmerRegistration";
 import FarmerLogin from "./screens/FarmerLogin";
 import FarmerDashboard from "./screens/FarmerDashboard";
 import FarmerListings from "./screens/FarmerListings";
+import FarmerNewListing from "./screens/FarmerNewListing";
 
 import NearbyBuyers from "./screens/NearbyBuyers";
 import MapView from "./screens/MapView";
@@ -35,7 +36,6 @@ import CropDemand from "./screens/CropDemand";
 import BuyerRegistration from "./screens/BuyerRegistration";
 import BuyerLogin from "./screens/BuyerLogin";
 import BuyerDashboard from "./screens/BuyerDashboard";
-
 
 /* =========================================================
    DEMO PAGE
@@ -63,16 +63,13 @@ function DemoPage({
           <strong>AgriLink AI</strong>
         </div>
 
-
         {/* TITLE */}
 
         <h1>{title}</h1>
 
-
         {/* DESCRIPTION */}
 
         <p>{description}</p>
-
 
         {/* BACK BUTTON */}
 
@@ -88,7 +85,6 @@ function DemoPage({
     </div>
   );
 }
-
 
 /* =========================================================
    APP
@@ -109,7 +105,6 @@ function App() {
           element={<LandingScreen />}
         />
 
-
         {/* =================================================
             LOGIN ROLE SELECTION
         ================================================= */}
@@ -118,7 +113,6 @@ function App() {
           path="/login"
           element={<LoginChoice />}
         />
-
 
         {/* =================================================
             ABOUT
@@ -134,7 +128,6 @@ function App() {
           }
         />
 
-
         {/* =================================================
             CONTACT
         ================================================= */}
@@ -148,7 +141,6 @@ function App() {
             />
           }
         />
-
 
         {/* =================================================
             FARMER AUTHENTICATION
@@ -164,7 +156,6 @@ function App() {
           element={<FarmerRegistration />}
         />
 
-
         {/* =================================================
             FARMER DASHBOARD
         ================================================= */}
@@ -173,7 +164,6 @@ function App() {
           path="/farmer/dashboard"
           element={<FarmerDashboard />}
         />
-
 
         {/* =================================================
             FARMER LISTINGS
@@ -184,21 +174,14 @@ function App() {
           element={<FarmerListings />}
         />
 
-
         {/* =================================================
             FARMER CREATE LISTING
         ================================================= */}
 
         <Route
           path="/farmer/listing/new"
-          element={
-            <DemoPage
-              title="Sell New Crop"
-              description="Create a new crop listing by entering the crop name, quantity, image and expected selling price."
-            />
-          }
+          element={<FarmerNewListing />}
         />
-
 
         {/* =================================================
             FARMER OFFERS
@@ -214,7 +197,6 @@ function App() {
           }
         />
 
-
         {/* =================================================
             FARMER BUYER DISCOVERY
         ================================================= */}
@@ -223,7 +205,6 @@ function App() {
           path="/farmer/buyers"
           element={<NearbyBuyers />}
         />
-
 
         {/* =================================================
             FARMER MAP
@@ -234,7 +215,6 @@ function App() {
           element={<MapView />}
         />
 
-
         {/* =================================================
             FARMER MARKET INTELLIGENCE
         ================================================= */}
@@ -244,7 +224,6 @@ function App() {
           element={<MarketIntelligence />}
         />
 
-
         {/* =================================================
             FARMER CROP DEMAND
         ================================================= */}
@@ -253,7 +232,6 @@ function App() {
           path="/farmer/demand"
           element={<CropDemand />}
         />
-
 
         {/* =================================================
             FARMER MESSAGES
@@ -269,7 +247,6 @@ function App() {
           }
         />
 
-
         {/* =================================================
             FARMER PROFILE
         ================================================= */}
@@ -283,7 +260,6 @@ function App() {
             />
           }
         />
-
 
         {/* =================================================
             BUYER AUTHENTICATION
@@ -299,7 +275,6 @@ function App() {
           element={<BuyerRegistration />}
         />
 
-
         {/* =================================================
             BUYER DASHBOARD
         ================================================= */}
@@ -308,7 +283,6 @@ function App() {
           path="/buyer/dashboard"
           element={<BuyerDashboard />}
         />
-
 
         {/* =================================================
             BUYER CREATE REQUIREMENT
@@ -324,7 +298,6 @@ function App() {
           }
         />
 
-
         {/* =================================================
             BUYER REQUIREMENTS
         ================================================= */}
@@ -338,7 +311,6 @@ function App() {
             />
           }
         />
-
 
         {/* =================================================
             BUYER FARMER LISTINGS
@@ -354,7 +326,6 @@ function App() {
           }
         />
 
-
         {/* =================================================
             BUYER BIDS
         ================================================= */}
@@ -368,7 +339,6 @@ function App() {
             />
           }
         />
-
 
         {/* =================================================
             BUYER MATCHING FARMERS
@@ -384,7 +354,6 @@ function App() {
           }
         />
 
-
         {/* =================================================
             BUYER MESSAGES
         ================================================= */}
@@ -398,7 +367,6 @@ function App() {
             />
           }
         />
-
 
         {/* =================================================
             BUYER PROFILE
@@ -414,7 +382,6 @@ function App() {
           }
         />
 
-
         {/* =================================================
             FALLBACK
         ================================================= */}
@@ -429,7 +396,6 @@ function App() {
     </BrowserRouter>
   );
 }
-
 
 /* =========================================================
    EXPORT
